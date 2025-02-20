@@ -1,0 +1,12 @@
+[package]
+name = "dns-kv"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+simple-dns = "0.9.3"
+tokio = { version = "1.43.0", features = ["rt-multi-thread", "macros", "net"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bincode = "1.3.3"
+data-encoding = "2.8.0"
