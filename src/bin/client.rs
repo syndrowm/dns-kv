@@ -9,7 +9,7 @@ use tokio::net::UdpSocket;
 type Result<T> = core::result::Result<T, Error>;
 type Error = Box<dyn std::error::Error>;
 
-const MAX_FQDN: usize = 63;
+const MAX_LABEL: usize = 63;
 
 fn txt_query_record(domain: &str) -> Result<Vec<u8>> {
     let mut pkt = Packet::new_query(1);
@@ -97,7 +97,7 @@ async fn set_value(server: &str, key: &str, value: &str) -> Result<()> {
 
     let blob = bincode::serialize(&message)?;
     let encoded = BASE32_NOPAD.encode(&blob);
-    for chunk in encoded.as_bytes().chunks(MAX_FQDN - domain.len()) {
+    for chunk in encoded.as_bytes().chunks(MAX_LABEL) {
         let chunk = String::from_utf8(chunk.to_vec()).unwrap();
         let fqdn = format!("{}{}", chunk, domain);
         let query = aaaa_query_record(&fqdn)?;
